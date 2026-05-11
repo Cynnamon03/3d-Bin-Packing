@@ -1,0 +1,24 @@
+# Node
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# React build output
+client/build/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+optimizer/__pycache__/
+
+# Environment
+.env
+.env.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
