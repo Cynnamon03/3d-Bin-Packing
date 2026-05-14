@@ -66,12 +66,7 @@ export default function BinViewer({ result, placements: placementsProp, containe
   const container = result ? result.container  : containerProp;
   const binsUsed  = result ? result.bins_used  : (binsUsedProp || 0);
 
-  if (!container || !items || items.length === 0) return null;
-
-  const { L, H, D } = container;
-  const BIN_GAP     = L * 0.12;
-
-  // Group items by bin
+  // Group items by bin — hook must come before any early return
   const byBin = useMemo(() => {
     const m = {};
     for (const it of items) {
@@ -81,6 +76,10 @@ export default function BinViewer({ result, placements: placementsProp, containe
     return m;
   }, [items]);
 
+  if (!container || !items || items.length === 0) return null;
+
+  const { L, H, D } = container;
+  const BIN_GAP     = L * 0.12;
   const binCount    = Math.max(binsUsed, ...Object.keys(byBin).map(Number)) + 1 || binsUsed;
   const totalWidth  = binCount * L + (binCount - 1) * BIN_GAP;
   const camDist     = Math.max(totalWidth, H, D) * 1.8;
