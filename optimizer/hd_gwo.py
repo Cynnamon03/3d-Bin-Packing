@@ -266,6 +266,7 @@ class HDGWO:
                     "max_iter":         self.max_iter,
                     "best_bins":        best.n_bins,
                     "best_dissipation": round(best.dissipation, 4),
+                    "best_composite":   round(best.composite, 4),
                     "temperature":      round(final_T, 1),
                     "last_udhc":        last_udhc,
                     "udhc_accepted":    udhc_accepted,

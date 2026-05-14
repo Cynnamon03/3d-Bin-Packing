@@ -17,6 +17,7 @@ All progress/debug text goes to stderr (never pollutes stdout JSON).
 import sys
 import json
 import math
+import time
 import argparse
 
 from instance_reader import load_instance
@@ -80,6 +81,7 @@ def main():
         })
 
     # ── Run optimizer ──────────────────────────────────────────────────────────
+    _start_time = time.time()
     optimizer = HDGWO(
         items=items,
         container=container,
@@ -110,13 +112,20 @@ def main():
         })
     packed_items.sort(key=lambda p: (p["bin_id"], p["z"], p["y"], p["x"]))
 
+    cap_vol      = container['L'] * container['H'] * container['D']
+    items_vol    = sum(p['l'] * p['h'] * p['d'] for p in packed_items)
+    vol_util_pct = round(items_vol / (best.n_bins * cap_vol) * 100, 2) if cap_vol > 0 else 0.0
+
     result = {
         "status":          "ok",
         "instance":        args.instance_path,
         "bins_used":       best.n_bins,
         "lower_bound":     lb,
+        "gap_pct":         round((best.n_bins - lb) / max(lb, 1) * 100, 2),
         "dissipation":     round(best.dissipation, 6),
         "composite_score": round(best.composite,   6),
+        "volume_util_pct": vol_util_pct,
+        "runtime_s":       round(time.time() - _start_time, 2),
         "container":       container,
         "n_items":         n,
         "items":           packed_items,
