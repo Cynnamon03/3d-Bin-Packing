@@ -1,58 +1,139 @@
-const express    = require("express");
-const cors       = require("cors");
-const fs         = require("fs");
-const path       = require("path");
-const { spawn }  = require("child_process");
-const readline   = require("readline");
-const WebSocket  = require("ws");
+const express   = require("express");
+const cors      = require("cors");
+const fs        = require("fs");
+const path      = require("path");
+const { spawn } = require("child_process");
+const readline  = require("readline");
+const WebSocket = require("ws");
 
 const app     = express();
 const PORT    = 3001;
 const WS_PORT = 3002;
 
 const DATA_ROOT = path.join(__dirname, "..", "data", "CLP-Datasets-Main", "BR");
-const OPTIMIZER  = path.join(__dirname, "..", "optimizer", "main_optimizer.py");
+const OPTIMIZER = path.join(__dirname, "..", "optimizer", "main_optimizer.py");
 
 app.use(cors());
 app.use(express.json());
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WebSocket server (port 3002)
-// React connects here to receive live optimizer updates.
+//
+// Each client connection owns its own Python child process.
+// Protocol (client → server):
+//   { action: "run",  instancePath: "<abs path>", maxTime?: 90 }
+//   { action: "stop" }
+//
+// Protocol (server → client, each message is a JSON line from Python or a
+// synthetic control message):
+//   { type: "instance_info",    container, n_items, lower_bound }
+//   { type: "iteration_update", iteration, max_iter, best_bins,
+//           best_dissipation, best_composite, temperature,
+//           last_udhc, udhc_accepted, solution:[...] }
+//   { type: "integration_applied", bins_reduced_by, new_bins }
+//   { type: "instance_complete", bins_used, lower_bound, gap_pct,
+//           dissipation, composite_score, volume_util_pct, runtime_s,
+//           container, n_items, items:[...] }
+//   { type: "stopped" }
+//   { type: "error",       error: "..." }
+//   { type: "run_closed",  code: 0|1 }
 // ─────────────────────────────────────────────────────────────────────────────
-const wss     = new WebSocket.Server({ port: WS_PORT });
-const clients = new Set();
+const wss = new WebSocket.Server({ port: WS_PORT });
 
 wss.on("connection", (ws) => {
-  clients.add(ws);
-  console.log(`WS client connected   (${clients.size} total)`);
+  console.log("WS client connected");
+  let childProc = null;
+
+  function send(obj) {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  }
+
+  function killChild() {
+    if (childProc) {
+      try { childProc.kill("SIGTERM"); } catch {}
+      childProc = null;
+    }
+  }
+
+  ws.on("message", (raw) => {
+    let msg;
+    try { msg = JSON.parse(raw); } catch { return; }
+
+    if (msg.action === "run") {
+      killChild(); // abort any prior run for this connection
+
+      const instancePath = msg.instancePath;
+      if (!instancePath) {
+        send({ type: "error", error: "instancePath required" });
+        return;
+      }
+
+      const norm = path.resolve(instancePath);
+      if (!norm.startsWith(path.resolve(DATA_ROOT))) {
+        send({ type: "error", error: "Path outside data directory" });
+        return;
+      }
+      if (!fs.existsSync(norm)) {
+        send({ type: "error", error: "File not found" });
+        return;
+      }
+
+      const maxTime = Math.min(Number(msg.maxTime) || 90, 300);
+
+      childProc = spawn(
+        "python",
+        [OPTIMIZER, norm, "--stream", "--max-time", String(maxTime)],
+        { env: { ...process.env, PYTHONMALLOC: "malloc" } }
+      );
+
+      const rl = readline.createInterface({ input: childProc.stdout, crlfDelay: Infinity });
+      rl.on("line", (line) => {
+        const t = line.trim();
+        if (!t) return;
+        try { send(JSON.parse(t)); } catch {}
+      });
+
+      childProc.stderr.on("data", (chunk) => process.stdout.write(chunk));
+
+      childProc.on("close", (code) => {
+        rl.close();
+        send({ type: "run_closed", code });
+        childProc = null;
+      });
+
+      childProc.on("error", (err) => {
+        send({ type: "error", error: err.message });
+        childProc = null;
+      });
+    }
+
+    if (msg.action === "stop") {
+      killChild();
+      send({ type: "stopped" });
+    }
+  });
+
   ws.on("close", () => {
-    clients.delete(ws);
-    console.log(`WS client disconnected (${clients.size} remaining)`);
+    console.log("WS client disconnected");
+    killChild();
   });
 });
 
-function broadcast(data) {
-  const msg = JSON.stringify(data);
-  for (const client of clients) {
-    if (client.readyState === WebSocket.OPEN) client.send(msg);
-  }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/instances
+// Returns all BR dataset instances grouped by set (BR0–BR18).
 // ─────────────────────────────────────────────────────────────────────────────
 app.get("/api/instances", (req, res) => {
   try {
     const instances = [];
     const sets = fs.readdirSync(DATA_ROOT)
-      .filter(n => fs.statSync(path.join(DATA_ROOT, n)).isDirectory())
+      .filter((n) => fs.statSync(path.join(DATA_ROOT, n)).isDirectory())
       .sort((a, b) => parseInt(a.replace("BR", "")) - parseInt(b.replace("BR", "")));
 
     for (const setName of sets) {
       const setPath = path.join(DATA_ROOT, setName);
       const files   = fs.readdirSync(setPath)
-        .filter(f => f.endsWith(".json"))
+        .filter((f) => f.endsWith(".json"))
         .sort((a, b) => parseInt(a) - parseInt(b));
 
       for (const file of files) {
@@ -69,139 +150,6 @@ app.get("/api/instances", (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /api/run-optimizer   (single instance, unchanged behaviour)
-// ─────────────────────────────────────────────────────────────────────────────
-app.post("/api/run-optimizer", (req, res) => {
-  const { instancePath } = req.body;
-  if (!instancePath) return res.status(400).json({ error: "instancePath required" });
-
-  const norm = path.resolve(instancePath);
-  if (!norm.startsWith(path.resolve(DATA_ROOT)))
-    return res.status(403).json({ error: "Path outside data directory" });
-  if (!fs.existsSync(norm))
-    return res.status(404).json({ error: "File not found" });
-
-  const py = spawn("python", [OPTIMIZER, norm], {
-    env: { ...process.env, PYTHONMALLOC: "malloc" },
-  });
-
-  let stdout = "", stderr = "";
-  py.stdout.on("data", c => { stdout += c; });
-  py.stderr.on("data", c => { stderr += c; });
-
-  py.on("close", code => {
-    if (code !== 0)
-      return res.status(500).json({ error: "Optimizer failed", detail: stderr.slice(-2000) });
-    try   { res.json(JSON.parse(stdout)); }
-    catch { res.status(500).json({ error: "Bad optimizer output", raw: stdout.slice(-2000) }); }
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /api/run-batch   { "set": "BR0" }
-// Streams every optimizer update to connected WebSocket clients.
-// ─────────────────────────────────────────────────────────────────────────────
-let batchRunning = false;
-
-app.post("/api/run-batch", (req, res) => {
-  if (batchRunning)
-    return res.status(409).json({ error: "A batch is already running. Restart the server to cancel." });
-
-  const { set: setName } = req.body;
-  
-  if (!setName) return res.status(400).json({ error: "'set' field required (e.g. 'BR0')" });
-
-  const setPath = path.join(DATA_ROOT, setName);
-  if (!fs.existsSync(setPath))
-    return res.status(404).json({ error: `Set '${setName}' not found at ${setPath}` });
-
-  const files = fs.readdirSync(setPath)
-    .filter(f => f.endsWith(".json"))
-    .sort((a, b) => parseInt(a) - parseInt(b));
-
-  if (!files.length) return res.status(404).json({ error: "No JSON files found in set folder" });
-
-  // Respond immediately so the browser isn't left waiting
-  res.json({ status: "started", set: setName, total: files.length });
-
-  batchRunning = true;
-  runBatch(setName, setPath, files).finally(() => { batchRunning = false; });
-
-  const py = spawn("python", [OPTIMIZER, filePath, "--stream", "--max-time", String(maxTime)], {
-    env: {  ...process.env, PYTHONMALLOC: "malloc" },
-  });  
-});
- 
-// ── Sequential batch runner ───────────────────────────────────────────────────
-async function runBatch(setName, setPath, files) {
-  console.log(`\n▶ Batch start: ${setName} (${files.length} instances)`);
-  broadcast({ type: "batch_start", set: setName, total: files.length });
-const filesToRun = files.slice(0, 5); // test with 5 first
-  for (let i = 0; i < filesToRun.length; i++) {
-    const file     = filesToRun[i];
-    const filePath = path.join(setPath, file);
-
-    console.log(`  [${i + 1}/${filesToRun.length}] ${setName}/${file}`);
-    broadcast({
-      type:  "instance_start",
-      set:   setName,
-      file,
-      index: i,
-      total: files.length,
-      label: `${setName} / ${file}`,
-    });
-
-    try {
-      await runStreamingInstance(filePath);
-    } catch (err) {
-      console.error(`  ERROR on ${file}:`, err.message);
-      broadcast({ type: "instance_error", file, error: err.message });
-      // Continue with next instance
-    }
-  }
-
-  broadcast({ type: "batch_complete", set: setName, total: files.length });
-  console.log(`✔ Batch ${setName} complete.\n`);
-}
-
-// ── Spawn one Python instance in streaming mode ───────────────────────────────
-function runStreamingInstance(filePath) {
-  return new Promise((resolve, reject) => {
-    const py = spawn("python", [OPTIMIZER, filePath, "--stream", "--max-time", "15"], {
-      env: {
-        ...process.env,
-        PYTHONMALLOC:            "malloc",
-        MALLOC_TRIM_THRESHOLD_:  "65536",
-      },
-    });
-
-    // Read Python stdout line by line; each line is a JSON message
-    const rl = readline.createInterface({ input: py.stdout, crlfDelay: Infinity });
-    rl.on("line", (line) => {
-      const trimmed = line.trim();
-      if (!trimmed) return;
-      try {
-        const msg = JSON.parse(trimmed);
-        broadcast(msg);
-      } catch {
-        // Ignore non-JSON lines (shouldn't appear in --stream mode)
-      }
-    });
-
-    // Forward Python stderr to our console for debugging
-    py.stderr.on("data", chunk => process.stdout.write(chunk));
-
-    py.on("close", (code) => {
-      rl.close();
-      if (code === 0) resolve();
-      else reject(new Error(`Python exited with code ${code}`));
-    });
-
-    py.on("error", reject);
-  });
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
