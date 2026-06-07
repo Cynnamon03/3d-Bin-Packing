@@ -10,8 +10,8 @@ const app     = express();
 const PORT    = 3001;
 const WS_PORT = 3002;
 
-const DATA_ROOT = path.join(__dirname, "..", "data", "CLP-Datasets-Main", "BR");
-const OPTIMIZER = path.join(__dirname, "..", "optimizer", "main_optimizer.py");
+const TRAIN_JSON = path.join(__dirname, "..", "data", "train", "instances.json");
+const OPTIMIZER = path.join(__dirname, "..", "optimizer", "run_preprocessed.py");
 
 app.use(cors());
 app.use(express.json());
@@ -62,19 +62,24 @@ wss.on("connection", (ws) => {
     if (msg.action === "run") {
       killChild(); // abort any prior run for this connection
 
-      const instancePath = msg.instancePath;
-      if (!instancePath) {
-        send({ type: "error", error: "instancePath required" });
+      const instanceIndex = msg.instanceIndex;
+      if (instanceIndex === undefined || instanceIndex === null) {
+        send({ type: "error", error: "instanceIndex required" });
         return;
       }
 
-      const norm = path.resolve(instancePath);
-      if (!norm.startsWith(path.resolve(DATA_ROOT))) {
-        send({ type: "error", error: "Path outside data directory" });
+      // Load preprocessed training dataset
+      let trainData;
+      try {
+        trainData = JSON.parse(fs.readFileSync(TRAIN_JSON, 'utf8'));
+      } catch (err) {
+        send({ type: "error", error: `Failed to load training dataset: ${err.message}` });
         return;
       }
-      if (!fs.existsSync(norm)) {
-        send({ type: "error", error: "File not found" });
+
+      const instances = trainData.instances || [];
+      if (instanceIndex < 0 || instanceIndex >= instances.length) {
+        send({ type: "error", error: `Instance index ${instanceIndex} out of range` });
         return;
       }
 
@@ -82,7 +87,7 @@ wss.on("connection", (ws) => {
 
       childProc = spawn(
         "python",
-        [OPTIMIZER, norm, "--stream", "--max-time", String(maxTime)],
+        [OPTIMIZER, String(instanceIndex), "--stream", "--max-time", String(maxTime)],
         { env: { ...process.env, PYTHONMALLOC: "malloc" } }
       );
 
@@ -121,31 +126,25 @@ wss.on("connection", (ws) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/instances
-// Returns all BR dataset instances grouped by set (BR0–BR18).
+// Returns all preprocessed training instances from data/train/instances.json.
 // ─────────────────────────────────────────────────────────────────────────────
 app.get("/api/instances", (req, res) => {
   try {
-    const instances = [];
-    const sets = fs.readdirSync(DATA_ROOT)
-      .filter((n) => fs.statSync(path.join(DATA_ROOT, n)).isDirectory())
-      .sort((a, b) => parseInt(a.replace("BR", "")) - parseInt(b.replace("BR", "")));
-
-    for (const setName of sets) {
-      const setPath = path.join(DATA_ROOT, setName);
-      const files   = fs.readdirSync(setPath)
-        .filter((f) => f.endsWith(".json"))
-        .sort((a, b) => parseInt(a) - parseInt(b));
-
-      for (const file of files) {
-        instances.push({
-          set:   setName,
-          file,
-          label: `${setName} / ${file}`,
-          path:  path.join(setPath, file),
-        });
-      }
+    if (!fs.existsSync(TRAIN_JSON)) {
+      return res.status(404).json({ error: "Training dataset not found. Run preprocess.py first." });
     }
-    res.json({ count: instances.length, instances });
+    
+    const trainData = JSON.parse(fs.readFileSync(TRAIN_JSON, 'utf8'));
+    const instances = trainData.instances || [];
+    
+    const result = instances.map((inst, index) => ({
+      index,
+      id: inst.id,
+      label: inst.id,
+      item_count: inst.item_count || inst.items?.length || 0,
+    }));
+    
+    res.json({ count: result.length, instances: result });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -155,5 +154,5 @@ app.get("/api/instances", (req, res) => {
 app.listen(PORT, () => {
   console.log(`\n✅  HTTP API  →  http://localhost:${PORT}`);
   console.log(`✅  WebSocket →  ws://localhost:${WS_PORT}`);
-  console.log(`    Dataset   →  ${DATA_ROOT}\n`);
+  console.log(`    Dataset   →  ${TRAIN_JSON}\n`);
 });

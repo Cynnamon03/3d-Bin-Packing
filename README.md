@@ -1,78 +1,196 @@
-# HANDOFF NOTE — Data Mining Activity (Real Results) June 7, 2026
+# 3D Bin Packing Preprocessing and Baseline Pipeline
 
-## What this is
-Our data mining document currently has "projected" numbers taken from the
-Kosari et al. paper, NOT from actually running our code. The professor wants
-REAL results from running our baseline model. This script produces those real
-numbers automatically.
+## Pipeline Architecture
 
-Our real HD-GWO baseline already works well (it hit optimal on test runs), so
-there is no downside — the real numbers are good.
+This repository separates dataset preparation from optimization execution.
 
+- `preprocess.py` is the deterministic data preparation pipeline.
+- The optimizer in `optimizer/` consumes only preprocessed JSON.
 
-## What you need to do (about 15 minutes)
+The architecture enforces a strict boundary:
+- Preprocessing performs auditing, parsing, cleaning, normalization, orientation generation, and greedy seeding.
+- The optimizer no longer performs raw data parsing or cleaning.
+- `data/held_out/` is isolated for final validation only and must not be used during baseline tuning.
 
-### Step 1 — Put the script in the right folder
-Copy `run_datamining.py` into:
-    D:\dev\3d-bin-packing\optimizer\
+## The Preprocessing Workflow
 
-(It sits next to instance_reader.py and baseline_2d.py, which it needs.)
+`preprocess.py` implements a seven-step preparation pipeline for 3D bin packing datasets:
 
+1. **Audit (data integrity)**
+   - Scans raw input files for JSON formatting issues, missing schema fields, non-numeric tokens, and empty lines.
 
-### Step 2 — Open a terminal in that folder
-In VS Code: open the project, press Ctrl+` (backtick) to open the terminal.
-Then type:
-    cd D:\dev\3d-bin-packing\optimizer
+2. **Parsing**
+   - Loads `.json`, `.txt`, and `.dat` files from the raw dataset root.
+   - Extracts container and item definitions into a normalized instance model.
 
+3. **Cleaning (Zero-dim, Oversized, Duplicates)**
+   - Removes items with zero or negative dimensions.
+   - Discards items that cannot fit any container orientation.
+   - Filters duplicate instances and malformed data.
 
-### Step 3 — Run the script
-Type this one line and press Enter:
+4. **Item Expansion (Qty to individual IDs)**
+   - Converts quantity fields into individual item objects.
+   - Each expanded item receives a unique ID for deterministic downstream processing.
 
-    python run_datamining.py --set BR0 --count 10 --max-time 30 --out results.txt
+5. **Normalisation ([0,1] scaling)**
+   - Scales item dimensions relative to the container.
+   - Produces normalized item fields such as `L_norm`, `W_norm`, and `H_norm`.
 
-It will:
-  - run our REAL HD-GWO baseline on 10 instances
-  - run S-FFD (the greedy comparator) on the same 10
-  - print a results table
-  - save everything to a file called results.txt in the same folder
+6. **Orientation Pre-generation**
+   - Computes all distinct valid 3D orientations for each item.
+   - Stores orientation candidates in each instance before optimization.
 
-It takes a few minutes. You'll see progress lines like:
-    [1/10] 1.json: HD-GWO 2 bins / 99.8%  |  S-FFD 3 bins / 66.5%
+7. **Greedy Seeding (Volume-based sorting)**
+   - Computes a deterministic greedy seed order by sorting items by volume in descending order.
+   - This order supports reproducible heuristic initialization.
 
+## Data Split Protocol
 
-### Step 4 — Copy the numbers into the document
-Open results.txt. You'll see two sections:
+The preprocessing pipeline produces two disjoint datasets:
 
-  1. A RESULTS TABLE  -> replace the fake table on page 5 of our document
-                         (the columns match: Active Bins, VUR %, Cost Score,
-                          Constraint Violations)
+- `data/train/instances.json`
+- `data/held_out/instances.json`
 
-  2. A COMPARISON SUMMARY -> use these for the "Comparison Against Greedy
-                             Baseline" section on page 7 (the bullet points
-                             about % fewer bins, VUR improvement, etc.)
+The split is:
+- **70% training data**
+- **30% held-out validation data**
+- **Fixed random seed: `42`** for reproducible shuffling and assignment
 
-Just swap our real numbers in place of the projected ones. Done.
+> `data/held_out/` is strictly reserved for final validation and must never be used during baseline execution.
 
+## Usage Guide
 
-## Important note for the writeup
-Change the dataset wording slightly. Our document says we used OR-Library
-.txt files (BR1, BR3, BR5, thpack7). What we ACTUALLY ran is the JSON-format
-Bischoff-Ratcliff (BR) instances from CLP-Datasets-Main (BR0, etc.).
+### 1. Run the preprocessing pipeline
 
-These are the SAME benchmark family (Bischoff-Ratcliff is part of OR-Library),
-just a different file format. So either:
-  - say we used the JSON-formatted BR instances, OR
-  - keep OR-Library wording but note the BR instances were used
+From the repository root:
 
-Whichever the group prefers — just make the document match what we actually ran.
+```bash
+python preprocess.py \
+  --source data/CLP-Datasets-main \
+  --train-dir data/train \
+  --held-out-dir data/held_out \
+  --report-path preprocessing_report.txt \
+  --train-ratio 0.7 \
+  --random-seed 42
+```
 
+This command:
+- audits and parses raw dataset files,
+- cleans and normalizes each instance,
+- expands item quantities,
+- generates orientation metadata,
+- sorts greedy seeds deterministically,
+- writes training and held-out JSON payloads,
+- writes `preprocessing_report.txt`.
 
-## If something breaks
-- "folder not found"  -> the BR data isn't at data\CLP-Datasets-Main\BR\.
-                         Check that the dataset was copied over.
-- "No module named..." -> run_datamining.py isn't in the optimizer folder
-                         next to baseline_2d.py and instance_reader.py.
-- It hangs on a big instance -> add  --count 5  to run fewer, or lower
-                         --max-time to 15.
+### 2. Run the baseline optimizer on the training set
 
-That's it. Run it, copy the real numbers in, and the submission is genuine.
+From the repository root:
+
+```bash
+python optimizer/run_baseline.py
+```
+
+By default, this command uses the preprocessed training file:
+
+```text
+data/train/instances.json
+```
+
+Optional flags:
+
+```bash
+python optimizer/run_baseline.py \
+  --data_path data/train/instances.json \
+  --count 5 \
+  --pop 20 \
+  --iter 50 \
+  --max-time 60 \
+  --out optimizer/results.json
+```
+
+## Before vs. After: Data Formats
+
+| Stage | Format | Purpose |
+|---|---|---|
+| Raw | `JSON`, `TXT`, `DAT` | Diverse benchmark input formats with container/item definitions |
+| Preprocessed | `data/train/instances.json` / `data/held_out/instances.json` | Clean, normalized JSON ready for optimizer execution |
+
+### Raw data example
+
+```json
+{
+  "Objects": [{ "Length": 100, "Depth": 50, "Height": 50 }],
+  "Items": [
+    { "Length": 10, "Depth": 20, "Height": 30, "Demand": 2 }
+  ]
+}
+```
+
+### Preprocessed output example
+
+```json
+{
+  "instances": [
+    {
+      "id": "BR0_1",
+      "container": { "L": 100, "W": 50, "H": 50 },
+      "container_norm": { "L": 1.0, "W": 1.0, "H": 1.0 },
+      "items": [
+        {
+          "id": "BR0_1_1_1",
+          "L": 10,
+          "W": 20,
+          "H": 30,
+          "qty": 1,
+          "volume": 6000,
+          "L_norm": 0.1,
+          "W_norm": 0.4,
+          "H_norm": 0.6,
+          "orientations": [
+            { "L": 10, "W": 20, "H": 30 },
+            { "L": 10, "W": 30, "H": 20 }
+          ]
+        }
+      ],
+      "greedy_seed": ["BR0_1_1_1"],
+      "item_count": 1
+    }
+  ]
+}
+```
+
+## Directory Structure
+
+```text
+3d-bin-packing/
+├── data/
+│   ├── train/
+│   │   └── instances.json
+│   ├── held_out/
+│   │   └── instances.json
+│   └── CLP-Datasets-main/  # raw benchmark source files
+├── optimizer/
+│   ├── baseline_2d.py
+│   ├── processed_instance_reader.py
+│   └── run_baseline.py
+├── preprocess.py
+└── preprocessing_report.txt
+```
+
+## Key Notes
+
+- The optimizer is now a consumer of preprocessed JSON only.
+- No data cleaning or normalization occurs inside `optimizer/run_baseline.py`.
+- `preprocess.py` is responsible for all data hygiene, reproducible splitting, and metadata generation.
+- `data/held_out/` is isolated for validation and should never be used for baseline tuning or training.
+
+## Validation and Reproducibility
+
+The preprocessing stage is designed for scientific rigor:
+- deterministic sorting and greedy seed generation,
+- fixed seed `42` for split reproducibility,
+- explicit audit reporting,
+- normalized dimensions in the range `[0, 1]`.
+
+Use `preprocessing_report.txt` to review dataset integrity, cleaning statistics, and normalization ranges.

@@ -195,7 +195,7 @@ function LoadingOverlay() {
 // ── Main Live Runner ──────────────────────────────────────────────────────────
 function LiveRunner() {
   const [instances,   setInstances]   = useState([]);
-  const [selected,    setSelected]    = useState('');
+  const [selected,    setSelected]    = useState(0);
   const [loadingList, setLoadingList] = useState(true);
   const [wsConnected, setWsConnected] = useState(false);
   const [running,     setRunning]     = useState(false);
@@ -315,7 +315,7 @@ function LiveRunner() {
       .then(data => {
         const list = data.instances || [];
         setInstances(list);
-        if (list.length) setSelected(list[0].path);
+        if (list.length) setSelected(list[0].index);
         setLoadingList(false);
       })
       .catch(() => {
@@ -326,7 +326,7 @@ function LiveRunner() {
 
   // ── Controls ──────────────────────────────────────────────────────────────
   const run = useCallback(() => {
-    if (!selected || running || !wsConnected) return;
+    if (selected === undefined || selected === null || running || !wsConnected) return;
     setRunning(true);
     setInstanceInfo(null);
     setPlacements(null);
@@ -335,7 +335,7 @@ function LiveRunner() {
     setStats(null);
     setFinalResult(null);
     setError(null);
-    wsRef.current.send(JSON.stringify({ action: 'run', instancePath: selected }));
+    wsRef.current.send(JSON.stringify({ action: 'run', instanceIndex: selected }));
   }, [selected, running, wsConnected]);
 
   const stop = useCallback(() => {
@@ -346,13 +346,15 @@ function LiveRunner() {
   const grouped = useMemo(() => {
     const g = {};
     for (const inst of instances) {
-      if (!g[inst.set]) g[inst.set] = [];
-      g[inst.set].push(inst);
+      // Extract set from instance ID (e.g., "BR0_1" → "BR0")
+      const setName = inst.id?.split('_')[0] || 'Other';
+      if (!g[setName]) g[setName] = [];
+      g[setName].push(inst);
     }
     return g;
   }, [instances]);
 
-  const canRun = wsConnected && !running && !!selected;
+  const canRun = wsConnected && !running && (selected !== undefined && selected !== null && selected !== '');
 
   return (
     <div>
@@ -369,13 +371,13 @@ function LiveRunner() {
               <select
                 style={S.select}
                 value={selected}
-                onChange={e => { setSelected(e.target.value); setFinalResult(null); setPlacements(null); setChartData([]); setStats(null); }}
+                onChange={e => { setSelected(parseInt(e.target.value, 10)); setFinalResult(null); setPlacements(null); setChartData([]); setStats(null); }}
                 disabled={running}
               >
                 {Object.entries(grouped).map(([setName, insts]) => (
                   <optgroup key={setName} label={setName}>
                     {insts.map(inst => (
-                      <option key={inst.path} value={inst.path}>{inst.label}</option>
+                      <option key={inst.index} value={inst.index}>{inst.label}</option>
                     ))}
                   </optgroup>
                 ))}
