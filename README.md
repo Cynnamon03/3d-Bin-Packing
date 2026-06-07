@@ -1,4 +1,4 @@
-# HANDOFF NOTE — Data Mining Activity (Real Results)
+# HANDOFF NOTE — Data Mining Activity (Real Results) June 7, 2026
 
 ## What this is
 Our data mining document currently has "projected" numbers taken from the
