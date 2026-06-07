@@ -342,7 +342,7 @@ function LiveRunner() {
     wsRef.current?.send(JSON.stringify({ action: 'stop' }));
   }, []);
 
-  // ── Group instances for <select> ──────────────────────────────────────────
+  // ── Group and naturally sort instances for <select> ───────────────────────
   const grouped = useMemo(() => {
     const g = {};
     for (const inst of instances) {
@@ -351,7 +351,20 @@ function LiveRunner() {
       if (!g[setName]) g[setName] = [];
       g[setName].push(inst);
     }
-    return g;
+    
+    // Sort items within each set naturally (e.g., BR0_1, BR0_2, BR0_10)
+    for (const key of Object.keys(g)) {
+      g[key].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+    }
+
+    // Sort the set names naturally (e.g., BR0, BR1, ..., BR10, LN)
+    const sortedKeys = Object.keys(g).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const sortedGrouped = {};
+    for (const key of sortedKeys) {
+      sortedGrouped[key] = g[key];
+    }
+    
+    return sortedGrouped;
   }, [instances]);
 
   const canRun = wsConnected && !running && (selected !== undefined && selected !== null && selected !== '');

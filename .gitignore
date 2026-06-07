@@ -22,3 +22,6 @@ Thumbs.db
 
 # VS Code
 .vscode/
+
+data/train/instances.json
+data/held_out/instances.json

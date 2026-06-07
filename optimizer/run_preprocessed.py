@@ -125,7 +125,7 @@ def main():
         "runtime_s": round(elapsed, 2),
         "container": container_opt,
         "n_items": n,
-        "items": best.bin_assignment,
+        "items": optimizer._make_solution(best),
     }
 
     if args.stream:
