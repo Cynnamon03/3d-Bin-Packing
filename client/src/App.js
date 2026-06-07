@@ -464,7 +464,7 @@ export default function App() {
   return (
     <div style={S.app}>
       <style>{GLOBAL_CSS}</style>
-      <div style={S.header}>3-D Bin Packing — HD-GWO Optimizer</div>
+      <div style={S.header}>STACKR: Structural Three-dimensional Adaptive Constraint-aware pacKing with Routing</div>
       <div style={S.sub}>Bischoff–Ratcliff dataset · BR0–BR18 · Live step-by-step visualisation</div>
       <LiveRunner />
     </div>

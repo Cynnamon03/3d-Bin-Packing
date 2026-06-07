@@ -75,8 +75,15 @@ def place_bin_dblf(item_indices, items, orient_ids, container, weight_capacity=N
         reverse=True
     )
 
-    for item_idx in sorted_items:
-        item      = items[item_idx]
+import time as _time
+_t_start = _time.time()
+
+for idx_pos, item_idx in enumerate(sorted_items):
+    # Hard time limit — remaining items become overflow rather than hang
+    if _time.time() - _t_start > 8.0:
+        overflow.extend(sorted_items[idx_pos:])
+        break
+        item = items[item_idx]
         orient_id = orient_ids.get(item_idx, 0)
         l, h, d   = get_dims(item, orient_id)
         wt        = item.get('weight', 1)

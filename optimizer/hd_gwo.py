@@ -158,11 +158,11 @@ class HDGWO:
                     accept = True
                 elif candidate.n_bins == current.n_bins:
                     dd = candidate.dissipation - current.dissipation
-                    if dd <= 0 or random.random() < math.exp(-dd / max(T, 1e-10)):
+                    if dd <= 0 or random.random() < math.exp(-dd / max(T, 1.0)):
                         accept = True
                 else:
                     df = candidate.composite - current.composite
-                    if random.random() < math.exp(-df / max(T, 1e-10)):
+                    if random.random() < math.exp(-df / max(T, 1.0)):
                         accept = True
 
                 if accept:
@@ -175,7 +175,7 @@ class HDGWO:
 
             T -= self.delta_T
 
-        return best_sa, last_udhc, udhc_accept, max(T, 0.0)
+        return best_sa, last_udhc, udhc_accept, max(T, 1.0)
 
     # ── Algorithm 3 – Integration ──────────────────────────────────────────────
     def _integrate(self, wolf):
